@@ -1,0 +1,21 @@
+# Maintainer: openOODA-tools <ops@openooda.org>
+pkgname=oocsv-bin
+_pkgname=oocsv
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="High-speed RFC 4180 CSV parser with SQL-like query filtering and header renaming."
+arch=('x86_64')
+url="https://github.com/openOODA-tools/oocsv"
+license=('Apache-2.0')
+depends=('glibc')
+provides=('oocsv')
+conflicts=('oocsv')
+source_x86_64=("${url}/releases/download/v${pkgver}/oocsv-linux-x86_64"
+               "uninstall.sh::https://raw.githubusercontent.com/openOODA-tools/${_pkgname}/v${pkgver}/uninstall.sh")
+sha256sums_x86_64=('SKIP'
+                   'SKIP')
+
+package() {
+    install -Dm755 "${srcdir}/oocsv-linux-x86_64" "${pkgdir}/usr/bin/oocsv"
+    install -Dm755 uninstall.sh "${pkgdir}/usr/bin/oocsv-uninstall"
+}

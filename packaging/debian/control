@@ -1,0 +1,14 @@
+Source: oocsv
+Section: utils
+Priority: optional
+Maintainer: openOODA-tools <ops@openooda.org>
+Standards-Version: 4.6.2
+Build-Depends: debhelper-compat (= 13)
+
+Package: oocsv
+Architecture: amd64
+Depends: libc6
+Description: CSV FILTER
+ High-speed RFC 4180 CSV parser with SQL-like query filtering and header renaming.
+ Capability-bounded openOODA utility with zero ambient authority,
+ oote theme palettes, and native Model Context Protocol (MCP) surface.
