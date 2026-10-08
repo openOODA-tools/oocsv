@@ -1,0 +1,117 @@
+// # oocsv RFC 4180 Parser
+//
+// Logline: Robust finite-state CSV parser supporting RFC 4180 quotes, escaped delimiters, and custom field separators.
+//
+// Setup: Parses raw text streams into structured CsvTable models without external dependencies.
+//
+// Beats:
+//   1. Implement character-level finite state machine with quote tracking.
+//   2. Handle escaped double-quote pairs and embedded newlines.
+//   3. Separate column headers from row arrays or synthesize positional names.
+//   4. Deliver verified CsvTable container with dimension metadata.
+
+import "core/csv_types.oo";
+
+pub fn parse_csv(text: String, delimiter: Int, has_header: Bool) -> CsvTable {
+    let n: Int = chars_len(text);
+    let mut all_rows: List[CsvRow] = list_new();
+    let mut cur_row: List[String] = list_new();
+    let mut cur_field: String = "";
+    let mut in_quotes: Bool = false;
+    let mut i: Int = 0;
+
+    while i < n {
+        let ch: Int = byte_at(text, i);
+
+        if in_quotes {
+            if ch == 34 {
+                if i + 1 < n && byte_at(text, i + 1) == 34 {
+                    cur_field = cur_field + "\"";
+                    i = i + 2;
+                } else {
+                    in_quotes = false;
+                    i = i + 1;
+                }
+            } else {
+                cur_field = cur_field + str_slice(text, i, i + 1);
+                i = i + 1;
+            }
+        } else {
+            if ch == 34 {
+                in_quotes = true;
+                i = i + 1;
+            } else if ch == delimiter {
+                cur_row = list_push(cur_row, cur_field);
+                cur_field = "";
+                i = i + 1;
+            } else if ch == 10 {
+                cur_row = list_push(cur_row, cur_field);
+                cur_field = "";
+                all_rows = list_push(all_rows, CsvRow { values: cur_row });
+                cur_row = list_new();
+                i = i + 1;
+            } else if ch == 13 {
+                i = i + 1;
+                if i < n && byte_at(text, i) == 10 {
+                    i = i + 1;
+                }
+                cur_row = list_push(cur_row, cur_field);
+                cur_field = "";
+                all_rows = list_push(all_rows, CsvRow { values: cur_row });
+                cur_row = list_new();
+            } else {
+                cur_field = cur_field + str_slice(text, i, i + 1);
+                i = i + 1;
+            }
+        }
+    }
+
+    if chars_len(cur_field) > 0 || list_len(cur_row) > 0 {
+        cur_row = list_push(cur_row, cur_field);
+        all_rows = list_push(all_rows, CsvRow { values: cur_row });
+    }
+
+    let total_parsed: Int = list_len(all_rows);
+    if total_parsed == 0 {
+        return CsvTable {
+            headers: list_new(),
+            rows: list_new(),
+            column_count: 0,
+            row_count: 0
+        };
+    }
+
+    if has_header {
+        let h_row: CsvRow = list_get(all_rows, 0);
+        let headers: List[String] = h_row.values;
+        let col_count: Int = list_len(headers);
+        let mut data_rows: List[CsvRow] = list_new();
+        let mut r_idx: Int = 1;
+        while r_idx < total_parsed {
+            data_rows = list_push(data_rows, list_get(all_rows, r_idx));
+            r_idx = r_idx + 1;
+        }
+        return CsvTable {
+            headers: headers,
+            rows: data_rows,
+            column_count: col_count,
+            row_count: list_len(data_rows)
+        };
+    }
+
+    let first_row: CsvRow = list_get(all_rows, 0);
+    let col_count: Int = list_len(first_row.values);
+    let mut syn_headers: List[String] = list_new();
+    let mut ci: Int = 1;
+    while ci <= col_count {
+        syn_headers = list_push(syn_headers, "col" + to_string(ci));
+        ci = ci + 1;
+    }
+
+    return CsvTable {
+        headers: syn_headers,
+        rows: all_rows,
+        column_count: col_count,
+        row_count: total_parsed
+    };
+}

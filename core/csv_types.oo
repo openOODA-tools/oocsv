@@ -1,0 +1,60 @@
+// # oocsv Core Data Types
+//
+// Logline: Data structures defining CSV tables, rows, query filter predicates, and operational configurations.
+//
+// Setup: Imported across parser, query, renderer, and CLI/MCP subsystems.
+//
+// Beats:
+//   1. Declare CsvRow container holding field value lists.
+//   2. Declare CsvTable holding header definitions, row arrays, and dimensionality metrics.
+//   3. Declare CsvFilter predicate supporting comparison and containment operators.
+//   4. Declare CsvConfig and export default constructor.
+
+type CsvRow = struct {
+    values: List[String]
+};
+
+type CsvTable = struct {
+    headers: List[String],
+    rows: List[CsvRow],
+    column_count: Int,
+    row_count: Int
+};
+
+type CsvFilter = struct {
+    column: String,
+    op: String,
+    value: String
+};
+
+type CsvConfig = struct {
+    delimiter: Int,
+    has_header: Bool,
+    select_cols: List[String],
+    filters: List[CsvFilter],
+    sort_col: String,
+    sort_desc: Bool,
+    limit: Int,
+    json_output: Bool,
+    csv_output: Bool,
+    demo_mode: Bool,
+    theme: String,
+    input_file: String
+};
+
+pub fn default_csv_config() -> CsvConfig {
+    return CsvConfig {
+        delimiter: 44, // ','
+        has_header: true,
+        select_cols: list_new(),
+        filters: list_new(),
+        sort_col: "",
+        sort_desc: false,
+        limit: 0,
+        json_output: false,
+        csv_output: false,
+        demo_mode: false,
+        theme: "default",
+        input_file: ""
+    };
+}

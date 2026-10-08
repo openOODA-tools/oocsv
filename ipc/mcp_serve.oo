@@ -1,0 +1,207 @@
+// # oocsv Streaming MCP Server
+//
+// Logline: JSON-RPC 2.0 stdio server exposing CSV parsing, filtering, column projection, and header metadata.
+//
+// Setup: Bridges standard input/output streaming JSON-RPC to the tabular CSV engine using bounded capability tokens.
+//
+// Beats:
+//   1. Handle MCP initialize handshake with server metadata.
+//   2. Expose tools/list catalogue with sovereign CSV manipulation tools.
+//   3. Dispatch tools/call for csv_parse, csv_filter, csv_select, csv_headers, and csv_demo.
+//   4. Deliver streaming JSON-RPC responses over standard output.
+
+import "core/csv_types.oo";
+import "core/csv_parser.oo";
+import "core/csv_query.oo";
+import "core/csv_demo.oo";
+import "render/csv_json.oo";
+import "ipc/json_field.oo";
+
+fn build_error(id: String, code: Int, msg: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":"
+        + to_string(code) + ",\"message\":\"" + json_escape(msg) + "\"}}\n";
+}
+
+fn build_tool_result(id: String, text: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\""
+        + json_escape(text) + "\"}]}}\n";
+}
+
+pub fn render_mcp_init(id: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id
+        + ",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"oocsv\",\"version\":\"0.2.0\"}}}\n";
+}
+
+pub fn render_mcp_tools_list(id: String) -> String {
+    let mut out: String = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"tools\":[";
+    out = out + "{\"name\":\"csv_parse\",\"description\":\"Parse RFC 4180 CSV stream or file into structured JSON records.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"data\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"delimiter\":{\"type\":\"string\"}}}}";
+    out = out + ",{\"name\":\"csv_filter\",\"description\":\"Filter CSV rows matching a predicate condition (e.g. col=val, col>num).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"data\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"filter\":{\"type\":\"string\"},\"delimiter\":{\"type\":\"string\"}},\"required\":[\"filter\"]}}";
+    out = out + ",{\"name\":\"csv_select\",\"description\":\"Project subset of CSV columns by name or index.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"data\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"columns\":{\"type\":\"string\"},\"delimiter\":{\"type\":\"string\"}},\"required\":[\"columns\"]}}";
+    out = out + ",{\"name\":\"csv_headers\",\"description\":\"Extract column headers and dimension counts from CSV data.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"data\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"delimiter\":{\"type\":\"string\"}}}}";
+    out = out + ",{\"name\":\"csv_demo\",\"description\":\"Return synthetic cluster node telemetry dataset and query pipeline.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}";
+    out = out + "]}}\n";
+    return out;
+}
+
+fn parse_delimiter(delim_str: String) -> Int {
+    if delim_str == "\\t" || delim_str == "tab" {
+        return 9;
+    }
+    if delim_str == ";" || delim_str == "semicolon" {
+        return 59;
+    }
+    if delim_str == "|" || delim_str == "pipe" {
+        return 124;
+    }
+    if chars_len(delim_str) > 0 {
+        return byte_at(delim_str, 0);
+    }
+    return 44;
+}
+
+fn parse_col_list(s: String) -> List[String] {
+    let mut out: List[String] = list_new();
+    let n: Int = chars_len(s);
+    let mut start: Int = 0;
+    let mut i: Int = 0;
+    while i < n {
+        if byte_at(s, i) == 44 {
+            let tok: String = str_trim(str_slice(s, start, i));
+            if chars_len(tok) > 0 {
+                out = list_push(out, tok);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < n {
+        let tok: String = str_trim(str_slice(s, start, n));
+        if chars_len(tok) > 0 {
+            out = list_push(out, tok);
+        }
+    }
+    return out;
+}
+
+fn load_csv_content(fr: &FsReadCap, req: String) -> String {
+    let path: String = extract_json_str(req, "path");
+    let raw_data: String = extract_json_str(req, "data");
+    if chars_len(path) > 0 {
+        let r: Result[String, String] = read_file(fr, path);
+        if r.is_ok() {
+            let v: String = match r { Ok(s) => s, Err(_) => "" };
+            return v;
+        }
+        return raw_data;
+    }
+    if chars_len(raw_data) > 0 {
+        return raw_data;
+    }
+    return build_demo_csv();
+}
+
+pub fn handle_mcp_call(
+    fr: &FsReadCap,
+    id: String,
+    tool_name: String,
+    req: String
+) -> String {
+    let delim_str: String = extract_json_str(req, "delimiter");
+    let delim: Int = parse_delimiter(delim_str);
+
+    if tool_name == "csv_parse" {
+        let content: String = load_csv_content(fr, req);
+        let tbl: CsvTable = parse_csv(content, delim, true);
+        return build_tool_result(id, table_to_json(tbl));
+    }
+
+    if tool_name == "csv_filter" {
+        let content: String = load_csv_content(fr, req);
+        let filt_expr: String = extract_json_str(req, "filter");
+        let tbl: CsvTable = parse_csv(content, delim, true);
+        let mut filters: List[CsvFilter] = list_new();
+        if chars_len(filt_expr) > 0 {
+            filters = list_push(filters, parse_filter_expr(filt_expr));
+        }
+        let filtered: CsvTable = apply_filters(tbl, filters);
+        return build_tool_result(id, table_to_json(filtered));
+    }
+
+    if tool_name == "csv_select" {
+        let content: String = load_csv_content(fr, req);
+        let cols_expr: String = extract_json_str(req, "columns");
+        let tbl: CsvTable = parse_csv(content, delim, true);
+        let cols: List[String] = parse_col_list(cols_expr);
+        let proj: CsvTable = project_columns(tbl, cols);
+        return build_tool_result(id, table_to_json(proj));
+    }
+
+    if tool_name == "csv_headers" {
+        let content: String = load_csv_content(fr, req);
+        let tbl: CsvTable = parse_csv(content, delim, true);
+        return build_tool_result(id, headers_to_json(tbl));
+    }
+
+    if tool_name == "csv_demo" {
+        let base: CsvTable = build_demo_table();
+        let filtered: CsvTable = build_demo_filtered_table();
+        return build_tool_result(id, demo_to_json(base, filtered));
+    }
+
+    return build_error(id, -32601, "Unknown tool: " + tool_name);
+}
+
+pub fn handle_mcp_message(fr: &FsReadCap, req: String) -> String {
+    let id_str: String = extract_json_str(req, "id");
+    let id: String = if chars_len(id_str) > 0 { "\"" + id_str + "\"" } else { "1" };
+    let method: String = extract_json_str(req, "method");
+
+    if method == "initialize" {
+        return render_mcp_init(id);
+    }
+    if method == "notifications/initialized" {
+        return "";
+    }
+    if method == "tools/list" {
+        return render_mcp_tools_list(id);
+    }
+    if method == "tools/call" {
+        let tool_name: String = extract_json_str(req, "name");
+        return handle_mcp_call(fr, id, tool_name, req);
+    }
+    if method == "shutdown" {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":null}\n";
+    }
+    return build_error(id, -32601, "Method not found: " + method);
+}
+
+pub fn run_mcp_server(fr: &FsReadCap) {
+    let mut buf: String = "";
+    let mut running: Bool = true;
+    while running {
+        let r: Result[String, String] = oo_read_stdin_chunk(fr, 4096);
+        if !r.is_ok() {
+            running = false;
+        } else {
+            let chunk: String = match r { Ok(s) => s, Err(_) => "" };
+            if chars_len(chunk) == 0 {
+                running = false;
+            } else {
+                buf = buf + chunk;
+                let mut nl_pos: Int = str_index_of(buf, "\n");
+                while nl_pos >= 0 {
+                    let line: String = str_slice(buf, 0, nl_pos);
+                    buf = str_slice(buf, nl_pos + 1, chars_len(buf));
+                    let trimmed: String = str_trim(line);
+                    if chars_len(trimmed) > 0 {
+                        let resp: String = handle_mcp_message(fr, trimmed);
+                        if chars_len(resp) > 0 {
+                            print(resp);
+                        }
+                    }
+                    nl_pos = str_index_of(buf, "\n");
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,128 @@
+// # oocsv IPC Test Anchor
+//
+// Logline: Test verification anchor for CLI options, JSON parsing utilities, and streaming MCP protocol handling.
+//
+// Setup: Exercises argument parsing, JSON field extraction, and JSON-RPC tool dispatch without external I/O.
+//
+// Beats:
+//   1. Verify JSON escaping and field extraction routines.
+//   2. Verify CLI argument parsing for switches, delimiters, and queries.
+//   3. Verify MCP initialization and tool enumeration frames.
+//   4. Deliver unified IPC test runner returning boolean status.
+
+import "ipc/json_field.oo";
+import "ipc/csv_opts.oo";
+import "ipc/mcp_serve.oo";
+
+pub fn test_json_field() -> Bool {
+    let esc: String = json_escape("line1\nline2\t\"quoted\"");
+    if !str_contains(esc, "\\n") || !str_contains(esc, "\\\"") {
+        print("FAIL: json_escape invalid\n");
+        return false;
+    }
+
+    let unesc: String = json_unescape("hello\\nworld\\\"test\\\"");
+    if !str_contains(unesc, "hello\nworld\"test\"") {
+        print("FAIL: json_unescape invalid\n");
+        return false;
+    }
+
+    let json_doc: String = "{\"method\":\"tools/call\",\"name\":\"csv_parse\",\"id\":42}";
+    let m: String = extract_json_str(json_doc, "method");
+    let name: String = extract_json_str(json_doc, "name");
+    if m != "tools/call" || name != "csv_parse" {
+        print("FAIL: extract_json_str failed\n");
+        return false;
+    }
+
+    let b_doc: String = "{\"enabled\":true,\"debug\":false}";
+    if !extract_json_bool(b_doc, "enabled", false) {
+        print("FAIL: extract_json_bool enabled failed\n");
+        return false;
+    }
+    if extract_json_bool(b_doc, "debug", true) {
+        print("FAIL: extract_json_bool debug failed\n");
+        return false;
+    }
+    return true;
+}
+
+pub fn test_csv_opts() -> Bool {
+    let mut args: List[String] = list_new();
+    args = list_push(args, "-d");
+    args = list_push(args, ";");
+    args = list_push(args, "-c");
+    args = list_push(args, "id,name,role");
+    args = list_push(args, "-w");
+    args = list_push(args, "status=active");
+    args = list_push(args, "-j");
+    args = list_push(args, "data.csv");
+
+    let p: ParsedCsv = parse_csv_args(args);
+    if p.config.delimiter != 59 {
+        print("FAIL: delimiter parsing mismatch\n");
+        return false;
+    }
+    if list_len(p.config.select_cols) != 3 {
+        print("FAIL: select cols count mismatch\n");
+        return false;
+    }
+    if list_len(p.config.filters) != 1 {
+        print("FAIL: filters count mismatch\n");
+        return false;
+    }
+    if !p.config.json_output {
+        print("FAIL: json_output switch not set\n");
+        return false;
+    }
+    if p.config.input_file != "data.csv" {
+        print("FAIL: input_file mismatch\n");
+        return false;
+    }
+
+    let help: String = render_csv_help();
+    if !str_contains(help, "Usage: oocsv") {
+        print("FAIL: help text mismatch\n");
+        return false;
+    }
+    return true;
+}
+
+pub fn test_mcp_frames() -> Bool {
+    let init_resp: String = render_mcp_init("\"test-1\"");
+    if !str_contains(init_resp, "protocolVersion") || !str_contains(init_resp, "oocsv") {
+        print("FAIL: mcp_init frame mismatch\n");
+        return false;
+    }
+
+    let list_resp: String = render_mcp_tools_list("\"test-2\"");
+    if !str_contains(list_resp, "csv_parse") || !str_contains(list_resp, "csv_filter") {
+        print("FAIL: mcp_tools_list frame mismatch\n");
+        return false;
+    }
+    if !str_contains(list_resp, "csv_select") || !str_contains(list_resp, "csv_demo") {
+        print("FAIL: mcp_tools_list tools missing\n");
+        return false;
+    }
+    return true;
+}
+
+pub fn run_ipc_tests() -> Bool {
+    print("Running oocsv IPC tests...\n");
+    if !test_json_field() {
+        return false;
+    }
+    print("  ✓ json_field tests passed\n");
+
+    if !test_csv_opts() {
+        return false;
+    }
+    print("  ✓ csv_opts tests passed\n");
+
+    if !test_mcp_frames() {
+        return false;
+    }
+    print("  ✓ mcp_frames tests passed\n");
+
+    return true;
+}

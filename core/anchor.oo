@@ -1,0 +1,110 @@
+// # oocsv Core Subsystem Unit Tests
+//
+// Logline: Verification anchors for RFC 4180 parsing, query predicate evaluation, and demo pipelines.
+//
+// Setup: Executes deterministic tests on CSV tokenization, column projection, and row filtering.
+//
+// Beats:
+//   1. Verify RFC 4180 parsing with quotes and escaped commas.
+//   2. Verify relational predicate parsing and column indexing.
+//   3. Verify table filtering and projection pipelines.
+//   4. Export unified core test runner.
+
+import "core/csv_types.oo";
+import "core/csv_parser.oo";
+import "core/csv_query.oo";
+import "core/csv_demo.oo";
+
+pub fn test_csv_parser() -> Bool {
+    let raw: String = "colA,colB,colC\n1,2,3\n4,\"hello, world\",6\n";
+    let tbl: CsvTable = parse_csv(raw, 44, true);
+
+    if tbl.column_count != 3 {
+        return false;
+    }
+    if tbl.row_count != 2 {
+        return false;
+    }
+
+    let r1: CsvRow = list_get(tbl.rows, 1);
+    if list_get(r1.values, 1) != "hello, world" {
+        return false;
+    }
+
+    // Test quote escaping
+    let raw_esc: String = "id,text\n1,\"say \"\"yes\"\"\"\n";
+    let tbl_esc: CsvTable = parse_csv(raw_esc, 44, true);
+    if tbl_esc.row_count != 1 {
+        return false;
+    }
+    let r_esc: CsvRow = list_get(tbl_esc.rows, 0);
+    if list_get(r_esc.values, 1) != "say \"yes\"" {
+        return false;
+    }
+
+    return true;
+}
+
+pub fn test_csv_query() -> Bool {
+    let tbl: CsvTable = build_demo_table();
+    if find_col_index(tbl.headers, "status") != 3 {
+        return false;
+    }
+    if find_col_index(tbl.headers, "2") != 1 {
+        return false;
+    }
+
+    let f: CsvFilter = parse_filter_expr("status=online");
+    if f.column != "status" || f.op != "=" || f.value != "online" {
+        return false;
+    }
+
+    let f_neq: CsvFilter = parse_filter_expr("role!=worker");
+    if f_neq.column != "role" || f_neq.op != "!=" || f_neq.value != "worker" {
+        return false;
+    }
+
+    let mut fl: List[CsvFilter] = list_new();
+    fl = list_push(fl, f);
+    let filtered: CsvTable = apply_filters(tbl, fl);
+    if filtered.row_count != 3 {
+        return false;
+    }
+
+    let mut cols: List[String] = list_new();
+    cols = list_push(cols, "hostname");
+    cols = list_push(cols, "cpu_pct");
+    let proj: CsvTable = project_columns(filtered, cols);
+    if proj.column_count != 2 {
+        return false;
+    }
+    if list_get(proj.headers, 0) != "hostname" || list_get(proj.headers, 1) != "cpu_pct" {
+        return false;
+    }
+
+    return true;
+}
+
+pub fn test_csv_demo() -> Bool {
+    let demo_tbl: CsvTable = build_demo_filtered_table();
+    if demo_tbl.row_count != 3 {
+        return false;
+    }
+    if demo_tbl.column_count != 3 {
+        return false;
+    }
+    return true;
+}
+
+pub fn run_core_tests() -> Bool {
+    if !test_csv_parser() {
+        return false;
+    }
+    if !test_csv_query() {
+        return false;
+    }
+    if !test_csv_demo() {
+        return false;
+    }
+    return true;
+}

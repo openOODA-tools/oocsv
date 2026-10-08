@@ -1,52 +1,163 @@
 // # oocsv Main Entry Point
 //
-// Logline: High-speed RFC 4180 CSV parser with SQL-like query filtering and header renaming.
+// Logline: Sovereign CSV query processor, schema filter, and projection engine with dual-surface CLI and MCP stdio interfaces.
 //
-// Setup: Demands explicit capability tokens and standard argument list.
+// Setup: Demands &FsReadCap, &ProcessCap, and &EnvCap tokens for capability-bounded stream processing.
 //
 // Beats:
-//   1. Parse command-line options and dispatch --help, --version, or --mcp.
-//   2. Execute capability-bounded oocsv operations.
-//   3. Format and output structured results to standard output.
+//   1. Parse command-line options and dispatch --help, --version, --test, or --mcp.
+//   2. Dispatch synthetic demo execution when --demo is specified.
+//   3. Read stream content from filesystem path or standard input.
+//   4. Filter, project, and render tabular, raw CSV, or JSON output.
 
-fn render_help() -> String {
-    return "oocsv 0.1.0 (openOODA sovereign data & streaming)\n"
-        + "usage: oocsv [options] [ARGUMENTS]...\n\n"
-        + "High-speed RFC 4180 CSV parser with SQL-like query filtering and header renaming.\n\n"
-        + "Options:\n"
-        + "  -h, --help           display this help and exit\n"
-        + "  -v, --version        output version information and exit\n"
-        + "      --json           output formatted as JSON Lines\n"
-        + "      --color <WHEN>   colorize output: auto, always, never [default: auto]\n"
-        + "      --theme <NAME>   override active oote palette\n"
-        + "      --mcp            run as Model Context Protocol stdio server\n";
-}
+import "core/csv_types.oo";
+import "core/csv_parser.oo";
+import "core/csv_query.oo";
+import "core/csv_demo.oo";
+import "render/csv_theme.oo";
+import "render/csv_view.oo";
+import "render/csv_json.oo";
+import "ipc/csv_opts.oo";
+import "ipc/mcp_serve.oo";
+import "anchor.oo";
 
 fn render_version() -> String {
-    return "oocsv 0.1.0 (openOODA sovereign data & streaming)\n";
+    return "oocsv 0.2.0 (openOODA sovereign CSV query engine)\n";
 }
 
-fn main(args: List[String]) -> Int {
-    let num_args: Int = list_len(args);
-    let mut i: Int = 0;
+fn read_all_stdin(fr: &FsReadCap) -> String {
+    let mut buf: String = "";
+    let mut reading: Bool = true;
+    while reading {
+        let r: Result[String, String] = oo_read_stdin_chunk(fr, 8192);
+        if !r.is_ok() {
+            reading = false;
+        } else {
+            let chunk: String = match r { Ok(s) => s, Err(_) => "" };
+            if chars_len(chunk) == 0 {
+                reading = false;
+            } else {
+                buf = buf + chunk;
+            }
+        }
+    }
+    return buf;
+}
 
-    while i < num_args {
-        let arg: String = list_get(args, i);
-        if arg == "-h" || arg == "--help" {
-            print(render_help());
-            return 0;
-        }
-        if arg == "-v" || arg == "--version" {
-            print(render_version());
-            return 0;
-        }
-        if arg == "--mcp" {
-            print("{\"jsonrpc\":\"2.0\",\"result\":{\"status\":\"ready\",\"tool\":\"oocsv\"}}\n");
-            return 0;
+fn render_headers_plain(tbl: CsvTable) -> String {
+    let mut out: String = "Headers (" + to_string(tbl.column_count) + "): ";
+    let n: Int = tbl.column_count;
+    let mut i: Int = 0;
+    while i < n {
+        out = out + list_get(tbl.headers, i);
+        if i + 1 < n {
+            out = out + ", ";
         }
         i = i + 1;
     }
+    out = out + "\n";
+    return out;
+}
 
-    print("oocsv: sovereign capability-bounded utility ready\n");
+fn main(
+    fr: &FsReadCap,
+    pr: &ProcessCap,
+    env: &EnvCap,
+    args: List[String]
+) -> Int {
+    let parsed: ParsedCsv = parse_csv_args(args);
+
+    if parsed.show_help {
+        print(render_csv_help());
+        return 0;
+    }
+
+    if parsed.show_version {
+        print(render_version());
+        return 0;
+    }
+
+    if parsed.run_mcp {
+        run_mcp_server(fr);
+        return 0;
+    }
+
+    if parsed.run_test {
+        if !run_all_tests() {
+            print("oocsv: internal anchor tests FAILED\n");
+            return 1;
+        }
+        print("oocsv: internal anchor tests PASSED\n");
+        return 0;
+    }
+
+    if chars_len(parsed.parse_error) > 0 {
+        print("oocsv: " + parsed.parse_error + "\nTry 'oocsv --help' for more information.\n");
+        return 1;
+    }
+
+    let th: ThemePalette = get_theme(parsed.config.theme);
+
+    if parsed.config.demo_mode {
+        let base: CsvTable = build_demo_table();
+        let filtered: CsvTable = build_demo_filtered_table();
+        if parsed.config.json_output {
+            print(demo_to_json(base, filtered) + "\n");
+        } else if parsed.config.csv_output {
+            print(render_raw_csv(filtered, parsed.config.delimiter));
+        } else {
+            print(render_demo_view(base, filtered, th));
+        }
+        return 0;
+    }
+
+    let mut content: String = "";
+    if parsed.config.input_file == "-" || chars_len(parsed.config.input_file) == 0 {
+        content = read_all_stdin(fr);
+        if chars_len(content) == 0 {
+            print("oocsv: missing operand\nTry 'oocsv --help' or 'oocsv --demo' for more information.\n");
+            return 1;
+        }
+    } else {
+        let r: Result[String, String] = read_file(fr, parsed.config.input_file);
+        if !r.is_ok() {
+            print("oocsv: " + parsed.config.input_file + ": No such file or directory\n");
+            return 1;
+        }
+        content = match r { Ok(v) => v, Err(_) => "" };
+    }
+
+    let mut tbl: CsvTable = parse_csv(content, parsed.config.delimiter, parsed.config.has_header);
+
+    if parsed.show_headers {
+        if parsed.config.json_output {
+            print(headers_to_json(tbl) + "\n");
+        } else {
+            print(render_headers_plain(tbl));
+        }
+        return 0;
+    }
+
+    if parsed.show_stats {
+        print("Rows: " + to_string(tbl.row_count) + ", Columns: " + to_string(tbl.column_count) + "\n");
+        return 0;
+    }
+
+    if list_len(parsed.config.filters) > 0 {
+        tbl = apply_filters(tbl, parsed.config.filters);
+    }
+
+    if list_len(parsed.config.select_cols) > 0 {
+        tbl = project_columns(tbl, parsed.config.select_cols);
+    }
+
+    if parsed.config.json_output {
+        print(table_to_json(tbl) + "\n");
+    } else if parsed.config.csv_output {
+        print(render_raw_csv(tbl, parsed.config.delimiter));
+    } else {
+        print(render_table_view(tbl, th));
+    }
+
     return 0;
 }

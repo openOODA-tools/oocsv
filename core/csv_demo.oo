@@ -1,0 +1,46 @@
+// # oocsv Demo Showcase Fixtures
+//
+// Logline: Synthetic cluster telemetry dataset and relational query demonstration models.
+//
+// Setup: Generates multi-column RFC 4180 server datasets for demonstration and automated testing.
+//
+// Beats:
+//   1. Construct synthetic cluster node dataset with heterogeneous attributes.
+//   2. Parse demo dataset into structured CsvTable container.
+//   3. Execute sample filter and projection pipeline.
+//   4. Export verified demonstration models.
+
+import "core/csv_types.oo";
+import "core/csv_parser.oo";
+import "core/csv_query.oo";
+
+pub fn build_demo_csv() -> String {
+    let mut out: String = "hostname,region,role,status,cpu_pct,mem_gb\n";
+    out = out + "node-alpha,us-east,gateway,online,14,32\n";
+    out = out + "node-beta,us-west,worker,online,78,64\n";
+    out = out + "node-gamma,eu-central,database,online,42,128\n";
+    out = out + "node-delta,ap-east,worker,degraded,91,64\n";
+    out = out + "node-epsilon,us-east,worker,offline,0,16\n";
+    return out;
+}
+
+pub fn build_demo_table() -> CsvTable {
+    return parse_csv(build_demo_csv(), 44, true);
+}
+
+pub fn build_demo_filtered_table() -> CsvTable {
+    let base: CsvTable = build_demo_table();
+    let mut filters: List[CsvFilter] = list_new();
+    filters = list_push(filters, CsvFilter {
+        column: "status",
+        op: "=",
+        value: "online"
+    });
+    let filtered: CsvTable = apply_filters(base, filters);
+
+    let mut cols: List[String] = list_new();
+    cols = list_push(cols, "hostname");
+    cols = list_push(cols, "role");
+    cols = list_push(cols, "cpu_pct");
+    return project_columns(filtered, cols);
+}

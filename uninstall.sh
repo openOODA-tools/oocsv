@@ -4,7 +4,7 @@
 # "Removes oocsv binary, package installations, and cache."
 #
 # Usage:
-#   curl -fsSL https://openooda-toocsv.github.io/oocsv/uninstall.sh | bash
+#   curl -fsSL https://openooda-tools.github.io/oocsv/uninstall.sh | bash
 #   or: ./uninstall.sh [options]
 #
 # Options:

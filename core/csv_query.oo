@@ -1,0 +1,216 @@
+// # oocsv Query & Transformation Engine
+//
+// Logline: Query predicates, column projection, and row filtering routines for tabular CSV datasets.
+//
+// Setup: Pure algorithmic dataset transformation adhering to declarative relational semantics.
+//
+// Beats:
+//   1. Resolve column identifiers by name or 1-based numerical index.
+//   2. Parse relational predicate expressions (=, !=, >, <, contains).
+//   3. Filter table rows against multiple conjunction predicates.
+//   4. Project selected columns producing restructured CsvTable instances.
+
+import "core/csv_types.oo";
+
+fn parse_int(s: String) -> Int {
+    let n: Int = chars_len(s);
+    let mut val: Int = 0;
+    let mut i: Int = if n > 0 && (byte_at(s, 0) == 45 || byte_at(s, 0) == 43) { 1 } else { 0 };
+    let sign: Int = if n > 0 && byte_at(s, 0) == 45 { -1 } else { 1 };
+    while i < n {
+        let ch: Int = byte_at(s, i);
+        if ch >= 48 && ch <= 57 { val = val * 10 + (ch - 48); }
+        i = i + 1;
+    }
+    return val * sign;
+}
+
+fn is_numeric(s: String) -> Bool {
+    let n: Int = chars_len(s);
+    if n == 0 { return false; }
+    let mut i: Int = if byte_at(s, 0) == 45 || byte_at(s, 0) == 43 { 1 } else { 0 };
+    if i >= n { return false; }
+    while i < n {
+        let ch: Int = byte_at(s, i);
+        if ch < 48 || ch > 57 { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn cmp_str(a: String, b: String) -> Int {
+    let na: Int = chars_len(a);
+    let nb: Int = chars_len(b);
+    let lim: Int = if na < nb { na } else { nb };
+    let mut i: Int = 0;
+    while i < lim {
+        let ca: Int = byte_at(a, i);
+        let cb: Int = byte_at(b, i);
+        if ca < cb { return -1; }
+        if ca > cb { return 1; }
+        i = i + 1;
+    }
+    if na < nb { return -1; }
+    if na > nb { return 1; }
+    return 0;
+}
+
+pub fn find_col_index(headers: List[String], col_name: String) -> Int {
+    let n: Int = list_len(headers);
+    let mut i: Int = 0;
+    while i < n {
+        if list_get(headers, i) == col_name { return i; }
+        i = i + 1;
+    }
+    if is_numeric(col_name) {
+        let num: Int = parse_int(col_name);
+        if num >= 1 && num <= n { return num - 1; }
+    }
+    return -1;
+}
+
+pub fn parse_filter_expr(expr: String) -> CsvFilter {
+    let mut op: String = "=";
+    let mut op_len: Int = 1;
+    let mut pos: Int = -1;
+
+    if str_contains(expr, "!=") {
+        pos = str_index_of(expr, "!=");
+        op = "!=";
+        op_len = 2;
+    } else if str_contains(expr, "==") {
+        pos = str_index_of(expr, "==");
+        op = "=";
+        op_len = 2;
+    } else if str_contains(expr, "=") {
+        pos = str_index_of(expr, "=");
+        op = "=";
+    } else if str_contains(expr, "~") {
+        pos = str_index_of(expr, "~");
+        op = "~";
+    } else if str_contains(expr, ">") {
+        pos = str_index_of(expr, ">");
+        op = ">";
+    } else if str_contains(expr, "<") {
+        pos = str_index_of(expr, "<");
+        op = "<";
+    }
+
+    if pos >= 0 {
+        return CsvFilter {
+            column: str_trim(str_slice(expr, 0, pos)),
+            op: op,
+            value: str_trim(str_slice(expr, pos + op_len, chars_len(expr)))
+        };
+    }
+    return CsvFilter { column: expr, op: "=", value: "" };
+}
+
+fn row_matches_filter(row: CsvRow, f: CsvFilter, col_idx: Int) -> Bool {
+    if col_idx < 0 || col_idx >= list_len(row.values) { return false; }
+    let cell_val: String = list_get(row.values, col_idx);
+    if f.op == "=" { return cell_val == f.value; }
+    if f.op == "!=" { return cell_val != f.value; }
+    if f.op == "~" { return str_contains(cell_val, f.value); }
+    if f.op == ">" {
+        if is_numeric(cell_val) && is_numeric(f.value) {
+            return parse_int(cell_val) > parse_int(f.value);
+        }
+        return cmp_str(cell_val, f.value) > 0;
+    }
+    if f.op == "<" {
+        if is_numeric(cell_val) && is_numeric(f.value) {
+            return parse_int(cell_val) < parse_int(f.value);
+        }
+        return cmp_str(cell_val, f.value) < 0;
+    }
+    return true;
+}
+
+pub fn apply_filters(table: CsvTable, filters: List[CsvFilter]) -> CsvTable {
+    let num_filters: Int = list_len(filters);
+    if num_filters == 0 { return table; }
+
+    let mut filtered_rows: List[CsvRow] = list_new();
+    let num_rows: Int = list_len(table.rows);
+    let mut ri: Int = 0;
+
+    while ri < num_rows {
+        let row: CsvRow = list_get(table.rows, ri);
+        let mut matches_all: Bool = true;
+        let mut fi: Int = 0;
+
+        while fi < num_filters {
+            let f: CsvFilter = list_get(filters, fi);
+            let col_idx: Int = find_col_index(table.headers, f.column);
+            if !row_matches_filter(row, f, col_idx) {
+                matches_all = false;
+                fi = num_filters;
+            }
+            fi = fi + 1;
+        }
+
+        if matches_all {
+            filtered_rows = list_push(filtered_rows, row);
+        }
+        ri = ri + 1;
+    }
+
+    return CsvTable {
+        headers: table.headers,
+        rows: filtered_rows,
+        column_count: table.column_count,
+        row_count: list_len(filtered_rows)
+    };
+}
+
+pub fn project_columns(table: CsvTable, selected_cols: List[String]) -> CsvTable {
+    let num_sel: Int = list_len(selected_cols);
+    if num_sel == 0 { return table; }
+
+    let mut new_headers: List[String] = list_new();
+    let mut col_indices: List[Int] = list_new();
+    let mut si: Int = 0;
+
+    while si < num_sel {
+        let col_name: String = list_get(selected_cols, si);
+        let idx: Int = find_col_index(table.headers, col_name);
+        if idx >= 0 {
+            new_headers = list_push(new_headers, list_get(table.headers, idx));
+            col_indices = list_push(col_indices, idx);
+        }
+        si = si + 1;
+    }
+
+    let active_cols: Int = list_len(col_indices);
+    if active_cols == 0 { return table; }
+
+    let mut new_rows: List[CsvRow] = list_new();
+    let num_rows: Int = list_len(table.rows);
+    let mut ri: Int = 0;
+
+    while ri < num_rows {
+        let old_row: CsvRow = list_get(table.rows, ri);
+        let mut new_vals: List[String] = list_new();
+        let mut ci: Int = 0;
+        while ci < active_cols {
+            let src_idx: Int = list_get(col_indices, ci);
+            let v: String = if src_idx < list_len(old_row.values) {
+                list_get(old_row.values, src_idx)
+            } else {
+                ""
+            };
+            new_vals = list_push(new_vals, v);
+            ci = ci + 1;
+        }
+        new_rows = list_push(new_rows, CsvRow { values: new_vals });
+        ri = ri + 1;
+    }
+
+    return CsvTable {
+        headers: new_headers,
+        rows: new_rows,
+        column_count: active_cols,
+        row_count: list_len(new_rows)
+    };
+}

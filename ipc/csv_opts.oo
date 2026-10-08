@@ -1,0 +1,157 @@
+// # oocsv CLI Options Parser
+//
+// Logline: Argument parser mapping CLI switches, delimiters, column selections, and filter expressions to CsvConfig records.
+//
+// Setup: Parses raw command-line argument lists into structured CSV query operations.
+//
+// Beats:
+//   1. Declare ParsedCsv container holding CsvConfig and operational dispatch flags.
+//   2. Parse custom delimiters, column projections, and relational query filters.
+//   3. Separate input file argument from execution switches.
+//   4. Deliver standard usage help text.
+
+import "core/csv_types.oo";
+import "core/csv_query.oo";
+
+type ParsedCsv = struct {
+    config: CsvConfig,
+    show_help: Bool,
+    show_version: Bool,
+    run_mcp: Bool,
+    run_test: Bool,
+    show_headers: Bool,
+    show_stats: Bool,
+    parse_error: String
+};
+
+fn split_commas(s: String) -> List[String] {
+    let mut out: List[String] = list_new();
+    let n: Int = chars_len(s);
+    let mut start: Int = 0;
+    let mut i: Int = 0;
+    while i < n {
+        if byte_at(s, i) == 44 {
+            let tok: String = str_trim(str_slice(s, start, i));
+            if chars_len(tok) > 0 {
+                out = list_push(out, tok);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < n {
+        let tok: String = str_trim(str_slice(s, start, n));
+        if chars_len(tok) > 0 {
+            out = list_push(out, tok);
+        }
+    }
+    return out;
+}
+
+pub fn parse_csv_args(args: List[String]) -> ParsedCsv {
+    let mut cfg: CsvConfig = default_csv_config();
+    let mut show_help: Bool = false;
+    let mut show_version: Bool = false;
+    let mut run_mcp: Bool = false;
+    let mut run_test: Bool = false;
+    let mut show_headers: Bool = false;
+    let mut show_stats: Bool = false;
+    let mut parse_error: String = "";
+
+    let num_args: Int = list_len(args);
+    let mut i: Int = 0;
+    while i < num_args {
+        let arg: String = list_get(args, i);
+        if arg == "-h" || arg == "--help" {
+            show_help = true;
+        } else if arg == "-v" || arg == "--version" {
+            show_version = true;
+        } else if arg == "--mcp" {
+            run_mcp = true;
+        } else if arg == "--test" {
+            run_test = true;
+        } else if arg == "--headers" {
+            show_headers = true;
+        } else if arg == "--stats" {
+            show_stats = true;
+        } else if arg == "--no-header" {
+            cfg.has_header = false;
+        } else if arg == "--csv" {
+            cfg.csv_output = true;
+        } else if arg == "-j" || arg == "--json" {
+            cfg.json_output = true;
+        } else if arg == "-D" || arg == "--demo" {
+            cfg.demo_mode = true;
+        } else if arg == "-d" || arg == "--delimiter" {
+            if i + 1 < num_args {
+                i = i + 1;
+                let d_str: String = list_get(args, i);
+                if d_str == "\\t" || d_str == "tab" {
+                    cfg.delimiter = 9;
+                } else if chars_len(d_str) > 0 {
+                    cfg.delimiter = byte_at(d_str, 0);
+                }
+            } else {
+                parse_error = "-d/--delimiter requires a separator character";
+            }
+        } else if arg == "-c" || arg == "-s" || arg == "--columns" || arg == "--select" {
+            if i + 1 < num_args {
+                i = i + 1;
+                let cols_str: String = list_get(args, i);
+                cfg.select_cols = split_commas(cols_str);
+            } else {
+                parse_error = "-c/--columns requires a comma-separated list of column names";
+            }
+        } else if arg == "-w" || arg == "--where" {
+            if i + 1 < num_args {
+                i = i + 1;
+                let expr: String = list_get(args, i);
+                let f: CsvFilter = parse_filter_expr(expr);
+                cfg.filters = list_push(cfg.filters, f);
+            } else {
+                parse_error = "-w/--where requires a filter predicate expression (e.g. col=val)";
+            }
+        } else if arg == "--theme" {
+            if i + 1 < num_args {
+                i = i + 1;
+                cfg.theme = list_get(args, i);
+            }
+        } else if str_starts_with(arg, "-") && arg != "-" {
+            parse_error = "Unknown option: " + arg;
+        } else if chars_len(cfg.input_file) == 0 {
+            cfg.input_file = arg;
+        }
+        i = i + 1;
+    }
+
+    return ParsedCsv {
+        config: cfg,
+        show_help: show_help,
+        show_version: show_version,
+        run_mcp: run_mcp,
+        run_test: run_test,
+        show_headers: show_headers,
+        show_stats: show_stats,
+        parse_error: parse_error
+    };
+}
+
+pub fn render_csv_help() -> String {
+    let mut out: String = "Usage: oocsv [OPTIONS] [FILE]\n\n";
+    out = out + "High-speed RFC 4180 CSV parser with SQL-like query filtering and header projection.\n\n";
+    out = out + "Options:\n";
+    out = out + "  -d, --delimiter <CHAR>    Field delimiter character: comma, tab, pipe, semicolon [default: ,]\n";
+    out = out + "  -c, -s, --select <COLS>   Comma-separated list of column names or 1-based indices to project\n";
+    out = out + "  -w, --where <PRED>        Row filter predicate: col=val, col!=val, col>val, col<val, col~val\n";
+    out = out + "      --no-header           Input data has no header row (synthesizes col1, col2...)\n";
+    out = out + "      --headers             Display table headers and column count only\n";
+    out = out + "      --stats               Display table row count, column count, and dimensions\n";
+    out = out + "      --csv                 Format output as RFC 4180 CSV stream\n";
+    out = out + "  -j, --json                Format output as JSON records array\n";
+    out = out + "  -D, --demo                Showcase relational query pipeline on synthetic cluster telemetry\n";
+    out = out + "      --theme <THEME>       Select terminal color theme (ember, ocean, matrix, cyber, monochrome)\n";
+    out = out + "      --mcp                 Run streaming MCP JSON-RPC 2.0 server on stdio\n";
+    out = out + "  -h, --help                Show this help message and exit\n";
+    out = out + "  -v, --version             Show version information and exit\n";
+    return out;
+}

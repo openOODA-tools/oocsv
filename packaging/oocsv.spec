@@ -1,5 +1,5 @@
 Name:           oocsv
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        High-speed RFC 4180 CSV parser with SQL-like query filtering and header renaming.
 License:        ASL 2.0
@@ -24,5 +24,5 @@ install -m 0755 %{SOURCE1} %{buildroot}/usr/bin/oocsv-uninstall
 /usr/bin/oocsv-uninstall
 
 %changelog
-* Wed Oct 07 2026 openOODA-tools <ops@openooda.org> - 0.1.0-1
-- Initial sovereign blueprint scaffolding
+* Wed Oct 08 2026 openOODA-tools <ops@openooda.org> - 0.2.0-1
+- Elevation to pure native openOODA v0.2.0 with MCP and tri-distro packaging

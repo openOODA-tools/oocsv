@@ -1,0 +1,113 @@
+// # oocsv JSON Serialization Subsystem
+//
+// Logline: Serializes CSV tables, headers, and query results into structured JSON records and arrays.
+//
+// Setup: Pure string manipulation routines formatting structured JSON without external dependencies.
+//
+// Beats:
+//   1. Escape strings for valid JSON field representation.
+//   2. Serialize CsvTable records into associative object arrays.
+//   3. Serialize header definitions and dimensionality metrics.
+//   4. Deliver complete demo query JSON payloads.
+
+import "core/csv_types.oo";
+
+fn escape_str(s: String) -> String {
+    let mut out: String = "";
+    let n: Int = chars_len(s);
+    let mut i: Int = 0;
+    while i < n {
+        let ch: Int = byte_at(s, i);
+        if ch == 34 {
+            out = out + "\\\"";
+        } else if ch == 92 {
+            out = out + "\\\\";
+        } else if ch == 10 {
+            out = out + "\\n";
+        } else if ch == 13 {
+            out = out + "\\r";
+        } else if ch == 9 {
+            out = out + "\\t";
+        } else {
+            out = out + str_slice(s, i, i + 1);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+pub fn headers_to_json(tbl: CsvTable) -> String {
+    let mut out: String = "{\"count\": " + to_string(tbl.column_count) + ", \"headers\": [";
+    let n: Int = tbl.column_count;
+    let mut i: Int = 0;
+    while i < n {
+        out = out + "\"" + escape_str(list_get(tbl.headers, i)) + "\"";
+        if i + 1 < n {
+            out = out + ", ";
+        }
+        i = i + 1;
+    }
+    out = out + "]}";
+    return out;
+}
+
+pub fn table_to_json(tbl: CsvTable) -> String {
+    let mut out: String = "{\n";
+    out = out + "  \"tool\": \"oocsv\",\n";
+    out = out + "  \"version\": \"0.2.0\",\n";
+    out = out + "  \"columns\": " + to_string(tbl.column_count) + ",\n";
+    out = out + "  \"rows\": " + to_string(tbl.row_count) + ",\n";
+    out = out + "  \"headers\": [";
+    let nh: Int = tbl.column_count;
+    let mut hi: Int = 0;
+    while hi < nh {
+        out = out + "\"" + escape_str(list_get(tbl.headers, hi)) + "\"";
+        if hi + 1 < nh {
+            out = out + ", ";
+        }
+        hi = hi + 1;
+    }
+    out = out + "],\n";
+    out = out + "  \"records\": [\n";
+
+    let num_rows: Int = list_len(tbl.rows);
+    let mut ri: Int = 0;
+    while ri < num_rows {
+        let row: CsvRow = list_get(tbl.rows, ri);
+        out = out + "    {";
+        let mut ci: Int = 0;
+        while ci < nh {
+            let h: String = list_get(tbl.headers, ci);
+            let v: String = if ci < list_len(row.values) {
+                list_get(row.values, ci)
+            } else {
+                ""
+            };
+            out = out + "\"" + escape_str(h) + "\": \"" + escape_str(v) + "\"";
+            if ci + 1 < nh {
+                out = out + ", ";
+            }
+            ci = ci + 1;
+        }
+        out = out + "}";
+        if ri + 1 < num_rows {
+            out = out + ",";
+        }
+        out = out + "\n";
+        ri = ri + 1;
+    }
+
+    out = out + "  ]\n";
+    out = out + "}";
+    return out;
+}
+
+pub fn demo_to_json(base: CsvTable, filtered: CsvTable) -> String {
+    let mut out: String = "{\n";
+    out = out + "  \"tool\": \"oocsv\",\n";
+    out = out + "  \"version\": \"0.2.0\",\n";
+    out = out + "  \"base\": " + table_to_json(base) + ",\n";
+    out = out + "  \"filtered\": " + table_to_json(filtered) + "\n";
+    out = out + "}";
+    return out;
+}

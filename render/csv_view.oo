@@ -1,0 +1,190 @@
+// # oocsv Terminal View Renderer
+//
+// Logline: Formats parsed CSV datasets into aligned tables, raw CSV streams, and statistical inspection cards.
+//
+// Setup: Bridges CsvTable models to human-readable streams with dynamic column width padding and themed styling.
+//
+// Beats:
+//   1. Calculate dynamic column widths and pad cell values.
+//   2. Format pretty-printed terminal table with headers and borders.
+//   3. Render raw RFC 4180 CSV text streams with delimiter quoting.
+//   4. Deliver demo query transformation view.
+
+import "core/csv_types.oo";
+import "render/csv_theme.oo";
+
+fn pad_right(s: String, width: Int) -> String {
+    let mut out: String = s;
+    let n: Int = chars_len(s);
+    let mut i: Int = n;
+    while i < width {
+        out = out + " ";
+        i = i + 1;
+    }
+    return out;
+}
+
+fn quote_csv_field(val: String, delimiter: Int) -> String {
+    let mut needs_quote: Bool = false;
+    let n: Int = chars_len(val);
+    let mut i: Int = 0;
+    while i < n {
+        let ch: Int = byte_at(val, i);
+        if ch == delimiter || ch == 34 || ch == 10 || ch == 13 {
+            needs_quote = true;
+            i = n;
+        }
+        i = i + 1;
+    }
+    if !needs_quote {
+        return val;
+    }
+
+    let mut out: String = "\"";
+    let mut j: Int = 0;
+    while j < n {
+        let ch: Int = byte_at(val, j);
+        if ch == 34 {
+            out = out + "\"\"";
+        } else {
+            out = out + str_slice(val, j, j + 1);
+        }
+        j = j + 1;
+    }
+    out = out + "\"";
+    return out;
+}
+
+pub fn render_table_view(tbl: CsvTable, th: ThemePalette) -> String {
+    let num_cols: Int = tbl.column_count;
+    if num_cols == 0 {
+        return "(empty table)\n";
+    }
+
+    let mut col_widths: List[Int] = list_new();
+    let mut ci: Int = 0;
+    while ci < num_cols {
+        let h: String = list_get(tbl.headers, ci);
+        let mut max_w: Int = chars_len(h);
+        let mut ri: Int = 0;
+        let num_rows: Int = list_len(tbl.rows);
+        while ri < num_rows {
+            let row: CsvRow = list_get(tbl.rows, ri);
+            if ci < list_len(row.values) {
+                let cell_len: Int = chars_len(list_get(row.values, ci));
+                if cell_len > max_w {
+                    max_w = cell_len;
+                }
+            }
+            ri = ri + 1;
+        }
+        col_widths = list_push(col_widths, max_w);
+        ci = ci + 1;
+    }
+
+    let mut out: String = "";
+    // Header
+    let mut hi: Int = 0;
+    while hi < num_cols {
+        let h: String = list_get(tbl.headers, hi);
+        let w: Int = list_get(col_widths, hi);
+        out = out + th.bold + th.primary + pad_right(h, w) + th.reset;
+        if hi + 1 < num_cols {
+            out = out + "  ";
+        }
+        hi = hi + 1;
+    }
+    out = out + "\n";
+
+    // Divider
+    let mut di: Int = 0;
+    while di < num_cols {
+        let w: Int = list_get(col_widths, di);
+        let mut k: Int = 0;
+        while k < w {
+            out = out + "-";
+            k = k + 1;
+        }
+        if di + 1 < num_cols {
+            out = out + "  ";
+        }
+        di = di + 1;
+    }
+    out = out + "\n";
+
+    // Rows
+    let num_rows: Int = list_len(tbl.rows);
+    let mut r_idx: Int = 0;
+    while r_idx < num_rows {
+        let row: CsvRow = list_get(tbl.rows, r_idx);
+        let mut c_idx: Int = 0;
+        while c_idx < num_cols {
+            let val: String = if c_idx < list_len(row.values) {
+                list_get(row.values, c_idx)
+            } else {
+                ""
+            };
+            let w: Int = list_get(col_widths, c_idx);
+            out = out + pad_right(val, w);
+            if c_idx + 1 < num_cols {
+                out = out + "  ";
+            }
+            c_idx = c_idx + 1;
+        }
+        out = out + "\n";
+        r_idx = r_idx + 1;
+    }
+
+    out = out + th.dim + "(" + to_string(tbl.row_count) + " rows, "
+        + to_string(tbl.column_count) + " columns)" + th.reset + "\n";
+    return out;
+}
+
+pub fn render_raw_csv(tbl: CsvTable, delimiter: Int) -> String {
+    let mut out: String = "";
+    let sep: String = if delimiter == 9 { "\t" } else if delimiter == 124 { "|" } else if delimiter == 59 { ";" } else { "," };
+
+    let num_cols: Int = tbl.column_count;
+    let mut hi: Int = 0;
+    while hi < num_cols {
+        let h: String = list_get(tbl.headers, hi);
+        out = out + quote_csv_field(h, delimiter);
+        if hi + 1 < num_cols {
+            out = out + sep;
+        }
+        hi = hi + 1;
+    }
+    out = out + "\n";
+
+    let num_rows: Int = list_len(tbl.rows);
+    let mut ri: Int = 0;
+    while ri < num_rows {
+        let row: CsvRow = list_get(tbl.rows, ri);
+        let mut ci: Int = 0;
+        while ci < num_cols {
+            let val: String = if ci < list_len(row.values) {
+                list_get(row.values, ci)
+            } else {
+                ""
+            };
+            out = out + quote_csv_field(val, delimiter);
+            if ci + 1 < num_cols {
+                out = out + sep;
+            }
+            ci = ci + 1;
+        }
+        out = out + "\n";
+        ri = ri + 1;
+    }
+    return out;
+}
+
+pub fn render_demo_view(base: CsvTable, filtered: CsvTable, th: ThemePalette) -> String {
+    let mut out: String = "\n" + th.bold + th.primary
+        + "=== Sovereign openOODA CSV Filter (oocsv) Showcase ===" + th.reset + "\n\n";
+    out = out + th.bold + th.secondary + "--- Original Cluster Node Telemetry ---" + th.reset + "\n";
+    out = out + render_table_view(base, th) + "\n";
+    out = out + th.bold + th.secondary + "--- Filtered Query: WHERE status=online SELECT hostname,role,cpu_pct ---" + th.reset + "\n";
+    out = out + render_table_view(filtered, th);
+    return out;
+}
